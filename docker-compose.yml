@@ -2,7 +2,6 @@ services:
   backend:
     build:
       context: ./backend
-    platform: ${DOCKER_PLATFORM:-linux/amd64}
     volumes:
       - ${HOST_DATA_DIR:-./backend/data}:${CONTAINER_DATA_DIR:-/app/data}
       - db-data:/app/db
@@ -18,7 +17,6 @@ services:
   frontend:
     build:
       context: ./frontend
-    platform: ${DOCKER_PLATFORM:-linux/amd64}
     ports:
       - "${FRONTEND_PORT:-3000}:80"
     depends_on:

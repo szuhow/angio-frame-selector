@@ -1,45 +1,20 @@
 #!/usr/bin/env bash
-# Start both backend and frontend for development
-set -e
+set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
-load_env_file() {
-	local env_file="$1"
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+	COMPOSE_CMD=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+	COMPOSE_CMD=(docker-compose)
+else
+	echo "Docker Compose is not available. Install Docker Desktop or docker-compose." >&2
+	exit 1
+fi
 
-	if [ -f "$env_file" ]; then
-		set -a
-		# shellcheck disable=SC1090
-		. "$env_file"
-		set +a
-	fi
-}
+cd "$DIR"
 
-load_env_file "$DIR/.env"
-load_env_file "$DIR/backend/.env"
+echo "=== Starting Keyselector containers ==="
+echo "Using: ${COMPOSE_CMD[*]} up --build"
 
-BACKEND_PORT="${BACKEND_PORT:-8000}"
-FRONTEND_DEV_PORT="${FRONTEND_DEV_PORT:-5173}"
-
-echo "=== Starting Keyselector ==="
-
-# Backend
-echo "→ Starting FastAPI backend on :$BACKEND_PORT ..."
-cd "$DIR/backend"
-uv run uvicorn main:app --reload --host 0.0.0.0 --port "$BACKEND_PORT" &
-BACK_PID=$!
-
-# Frontend
-echo "→ Starting Vite dev server on :$FRONTEND_DEV_PORT ..."
-cd "$DIR/frontend"
-npm run dev -- --host 0.0.0.0 --port "$FRONTEND_DEV_PORT" &
-FRONT_PID=$!
-
-echo ""
-echo "Backend:  http://localhost:$BACKEND_PORT"
-echo "Frontend: http://localhost:$FRONTEND_DEV_PORT"
-echo ""
-echo "Press Ctrl+C to stop both."
-
-trap "kill $BACK_PID $FRONT_PID 2>/dev/null; exit" INT TERM
-wait
+exec "${COMPOSE_CMD[@]}" up --build "$@"

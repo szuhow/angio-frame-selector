@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.13-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -7,6 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # OpenCV headless needs libgl
 RUN apt-get update && \
+    apt-get upgrade -y && \
     apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && \
     rm -rf /var/lib/apt/lists/*
 

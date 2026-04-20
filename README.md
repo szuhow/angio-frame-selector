@@ -16,8 +16,8 @@ Frontend nie wymaga osobnego pliku env w obecnej konfiguracji. W developmentcie 
 ## Wymagania
 
 - Docker + Docker Compose
-- `uv` dla backendu Python
-- Node.js 20+ dla frontendu przy lokalnym developmentcie
+- `uv` dla backendu Python przy lokalnym uruchamianiu backendu bez Dockera
+- Node.js 20+ dla frontendu przy lokalnym developmentcie bez Dockera
 
 ## Szybki start z Docker Compose
 
@@ -32,8 +32,10 @@ Frontend nie wymaga osobnego pliku env w obecnej konfiguracji. W developmentcie 
 3. Uruchom stos:
 
    ```bash
-   docker compose up --build
+   ./start.sh
    ```
+
+   Skrypt uruchamia `docker compose up --build` z katalogu głównego projektu.
 
 4. Otwórz aplikację:
 
@@ -41,6 +43,20 @@ Frontend nie wymaga osobnego pliku env w obecnej konfiguracji. W developmentcie 
    - backend API: `http://localhost:8000`
 
 Domyślnie dane wejściowe są montowane z `backend/data/`, a baza SQLite jest trzymana w wolumenie Dockera `db-data`.
+
+Compose buduje obrazy natywnie dla architektury hosta. Na Apple Silicon daje to obrazy `arm64`, a na typowym serwerze Ubuntu obrazy `amd64`.
+
+Jeśli z Apple Silicon chcesz celowo zbudować obraz pod Ubuntu `x86_64`, uruchom build z wymuszoną platformą:
+
+```bash
+DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose build
+```
+
+Analogicznie możesz uruchomić cały stos:
+
+```bash
+DOCKER_DEFAULT_PLATFORM=linux/amd64 ./start.sh
+```
 
 ## Lokalne uruchamianie bez Dockera
 
@@ -68,15 +84,21 @@ Domyślnie dane wejściowe są montowane z `backend/data/`, a baza SQLite jest t
    npm ci
    ```
 
-### Start obu usług
+### Start obu usług lokalnie
 
-Z katalogu głównego projektu:
+Uruchom backend w jednym terminalu:
 
 ```bash
-./start.sh
+cd backend
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Skrypt ładuje opcjonalnie `.env` z katalogu głównego i `backend/.env`, uruchamia backend przez `uv run` oraz frontend przez `vite`.
+Uruchom frontend w drugim terminalu:
+
+```bash
+cd frontend
+npm run dev -- --host 0.0.0.0 --port 5173
+```
 
 ## Zarządzanie zależnościami backendu
 
@@ -103,6 +125,8 @@ Najważniejsze zmienne używane przez kontenery i backend:
 - `CONTAINER_DB_PATH` – ścieżka do pliku SQLite wewnątrz kontenera
 - `JWT_SECRET` – sekret do podpisywania tokenów JWT
 - `JWT_EXPIRY_HOURS` – czas ważności tokenów
+
+Zmienne architektury obrazu nie są ustawiane w `.env.example`. Domyślny build używa architektury hosta, a cross-build pod `amd64` najlepiej wymuszać jednorazowo przez `DOCKER_DEFAULT_PLATFORM=linux/amd64`.
 
 ## Kontrola wersji
 
