@@ -2,6 +2,7 @@ services:
   backend:
     build:
       context: ./backend
+      network: host
     volumes:
       - ${HOST_DATA_DIR:-./backend/data}:${CONTAINER_DATA_DIR:-/app/data}
       - db-data:/app/db
@@ -17,6 +18,7 @@ services:
   frontend:
     build:
       context: ./frontend
+      network: host
     ports:
       - "${FRONTEND_PORT:-3000}:80"
     depends_on:
