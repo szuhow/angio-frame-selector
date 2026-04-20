@@ -1,0 +1,29 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    volumes:
+      - ${HOST_DATA_DIR:-./backend/data}:${CONTAINER_DATA_DIR:-/app/data}
+      - db-data:/app/db
+    environment:
+      DATA_DIR: ${CONTAINER_DATA_DIR:-/app/data}
+      DB_PATH: ${CONTAINER_DB_PATH:-/app/db/keyselector.db}
+      JWT_SECRET: ${JWT_SECRET:-replace-me-before-production}
+      JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  db-data:

@@ -1,0 +1,42 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+backend/.venv/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local runtime state
+backend/data/
+backend/old/
+keyselector.db
+keyselector.db-shm
+keyselector.db-wal
+annotations.json
+*.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.*
+
+# IDE / editor
+.idea/
+.vscode/
+
+openspec/
