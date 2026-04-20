@@ -22,16 +22,16 @@ export default function ActionPanel({
           Aktywna projekcja
         </h3>
         <div className="bg-gray-800 rounded-lg p-3 space-y-1">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-400">Pacjent</span>
-            <span className="text-white font-medium">{patientId}</span>
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span className="text-gray-400 shrink-0">Pacjent</span>
+            <span className="text-white font-medium truncate" title={patientId}>{patientId}</span>
           </div>
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-400">Sekwencja</span>
-            <span className="text-white font-medium">{sequenceId}</span>
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span className="text-gray-400 shrink-0">Sekwencja</span>
+            <span className="text-white font-medium truncate" title={sequenceId}>{sequenceId}</span>
           </div>
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-400">Klatka</span>
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span className="text-gray-400 shrink-0">Klatka</span>
             <span className="text-blue-400 font-mono font-medium">
               {currentFrame + 1} / {totalFrames}
             </span>
