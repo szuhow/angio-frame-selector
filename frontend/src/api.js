@@ -108,3 +108,9 @@ export async function fetchStats() {
   if (!res.ok) throw new Error('Failed to fetch stats');
   return res.json();
 }
+
+export async function exportCoco() {
+  const res = await apiFetch(`${API}/api/export/coco`);
+  if (!res.ok) throw new Error('Failed to export COCO');
+  return res.json();
+}

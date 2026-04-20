@@ -775,3 +775,99 @@ def stats(user: dict = Depends(get_current_user)):
         "skipped": skipped_seq,
         "remaining": total_seq - done_seq - skipped_seq,
     }
+
+
+# ---------------------------------------------------------------------------
+# API – COCO export
+# ---------------------------------------------------------------------------
+
+@app.get("/api/export/coco")
+def export_coco(user: dict = Depends(get_current_user)):
+    """
+    Export annotations in a COCO-like classification format.
+
+    Each annotated sequence becomes an image entry with the selected key frame
+    index stored as a classification annotation.
+    """
+    patients_data = scan_data_dir()
+    with _db() as cur:
+        cur.execute(
+            "SELECT patient_id, sequence_id, frame_index, comment, user_id, created_at "
+            "FROM annotations ORDER BY patient_id, sequence_id"
+        )
+        annotations_rows = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            "SELECT patient_id, sequence_id, reason, user_id, created_at "
+            "FROM skipped ORDER BY patient_id, sequence_id"
+        )
+        skipped_rows = [dict(r) for r in cur.fetchall()]
+
+    ann_map = {(a["patient_id"], a["sequence_id"]): a for a in annotations_rows}
+    skip_map = {(s["patient_id"], s["sequence_id"]): s for s in skipped_rows}
+
+    categories = [
+        {"id": 1, "name": "key_frame", "supercategory": "frame_classification"},
+        {"id": 2, "name": "skipped", "supercategory": "frame_classification"},
+    ]
+
+    images = []
+    coco_annotations = []
+    img_id = 0
+    ann_id = 0
+
+    for p in patients_data:
+        for seq in p["sequences"]:
+            key = (p["patient_id"], seq["sequence_id"])
+            img_id += 1
+
+            image_entry = {
+                "id": img_id,
+                "file_name": f"{p['patient_id']}/{seq['sequence_id']}",
+                "patient_id": p["patient_id"],
+                "sequence_id": seq["sequence_id"],
+                "frame_count": seq["frame_count"],
+                "sequence_type": seq["type"],
+                "status": seq["status"],
+            }
+            images.append(image_entry)
+
+            if key in ann_map:
+                a = ann_map[key]
+                ann_id += 1
+                coco_annotations.append({
+                    "id": ann_id,
+                    "image_id": img_id,
+                    "category_id": 1,
+                    "attributes": {
+                        "frame_index": a["frame_index"],
+                        "comment": a["comment"],
+                        "annotated_by": a["user_id"],
+                        "annotated_at": a["created_at"],
+                    },
+                })
+            elif key in skip_map:
+                s = skip_map[key]
+                ann_id += 1
+                coco_annotations.append({
+                    "id": ann_id,
+                    "image_id": img_id,
+                    "category_id": 2,
+                    "attributes": {
+                        "reason": s["reason"],
+                        "skipped_by": s["user_id"],
+                        "skipped_at": s["created_at"],
+                    },
+                })
+
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "info": {
+            "description": "Coronary angiography key frame selection",
+            "version": "1.0",
+            "date_created": now,
+            "exported_by": user["username"],
+        },
+        "images": images,
+        "annotations": coco_annotations,
+        "categories": categories,
+    }

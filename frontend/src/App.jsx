@@ -8,9 +8,9 @@ import AdminPanel from './components/AdminPanel';
 import {
   setToken, getToken,
   fetchPatients, fetchFramesBulk, fetchSequenceAnnotation,
-  submitAnnotation, submitSkip, login as apiLogin,
+  submitAnnotation, submitSkip, login as apiLogin, exportCoco,
 } from './api';
-import { Heart, LogOut, Shield } from 'lucide-react';
+import { Heart, LogOut, Shield, Download } from 'lucide-react';
 
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 480;
@@ -240,6 +240,21 @@ export default function App() {
     advanceToNext();
   }, [selectedPatient, selectedSequence, comment, advanceToNext]);
 
+  const handleExportCoco = useCallback(async () => {
+    try {
+      const data = await exportCoco();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `keyselector_coco_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export failed:', err);
+    }
+  }, []);
+
   // Auth checking spinner
   if (authChecking) {
     return (
@@ -299,6 +314,13 @@ export default function App() {
           <div className="flex items-center gap-4">
             <StatsBar refreshKey={refreshKey} />
             <div className="flex items-center gap-2 ml-4 border-l border-gray-800 pl-4">
+              <button
+                onClick={handleExportCoco}
+                className="p-1.5 hover:bg-gray-800 rounded-lg transition-colors"
+                title="Eksport COCO JSON"
+              >
+                <Download className="w-4 h-4 text-green-400" />
+              </button>
               {user.role === 'admin' && (
                 <button
                   onClick={() => setShowAdmin(true)}
