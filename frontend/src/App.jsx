@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Sidebar from './components/Sidebar';
 import FrameViewer from './components/FrameViewer';
 import ActionPanel from './components/ActionPanel';
@@ -54,7 +54,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [comment, setComment] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
-  const [markedFrame, setMarkedFrame] = useState(null);
+  const [allAnnotations, setAllAnnotations] = useState([]);
+
+  const markedFrame = useMemo(() => {
+    const myAnn = allAnnotations.find((a) => a.user_id === user?.username);
+    return myAnn ? myAnn.frame_index : null;
+  }, [allAnnotations, user]);
 
   // Check stored token on mount
   useEffect(() => {
@@ -147,19 +152,19 @@ export default function App() {
     if (!selectedPatient || !selectedSequence) {
       setFrames([]);
       setCurrentFrame(0);
-      setMarkedFrame(null);
+      setAllAnnotations([]);
       return;
     }
     setLoading(true);
     setCurrentFrame(0);
     setComment('');
-    setMarkedFrame(null);
+    setAllAnnotations([]);
 
     Promise.all([
       fetchFramesBulk(selectedPatient, selectedSequence),
       fetchSequenceAnnotation(selectedPatient, selectedSequence).catch(() => null),
     ])
-      .then(([data, annotation]) => {
+      .then(([data, result]) => {
         const blobUrls = data.frames.map((b64) => {
           const bin = atob(b64);
           const arr = new Uint8Array(bin.length);
@@ -169,10 +174,13 @@ export default function App() {
         });
         setFrames(blobUrls);
 
-        if (annotation && annotation.type === 'annotation') {
-          setMarkedFrame(annotation.frame_index);
-          setCurrentFrame(annotation.frame_index);
-          setComment(annotation.comment || '');
+        if (result && result.annotations) {
+          setAllAnnotations(result.annotations);
+          const myAnn = result.annotations.find((a) => a.user_id === user.username);
+          if (myAnn) {
+            setCurrentFrame(myAnn.frame_index);
+            setComment(myAnn.comment || '');
+          }
         }
       })
       .catch(console.error)
@@ -224,9 +232,21 @@ export default function App() {
       frame_index: currentFrame,
       comment,
     });
-    setMarkedFrame(currentFrame);
+    setAllAnnotations((prev) => {
+      const filtered = prev.filter((a) => a.user_id !== user.username);
+      return [
+        ...filtered,
+        {
+          type: 'annotation',
+          user_id: user.username,
+          frame_index: currentFrame,
+          comment,
+          created_at: new Date().toISOString(),
+        },
+      ];
+    });
     setRefreshKey((k) => k + 1);
-  }, [selectedPatient, selectedSequence, currentFrame, comment]);
+  }, [selectedPatient, selectedSequence, currentFrame, comment, user]);
 
   const handleSkip = useCallback(async () => {
     if (!selectedPatient || !selectedSequence) return;
@@ -235,10 +255,10 @@ export default function App() {
       sequence_id: selectedSequence,
       reason: comment || 'Zła jakość',
     });
-    setMarkedFrame(null);
+    setAllAnnotations((prev) => prev.filter((a) => a.user_id !== user.username));
     setRefreshKey((k) => k + 1);
     advanceToNext();
-  }, [selectedPatient, selectedSequence, comment, advanceToNext]);
+  }, [selectedPatient, selectedSequence, comment, advanceToNext, user]);
 
   const handleExportCoco = useCallback(async () => {
     try {
@@ -353,6 +373,8 @@ export default function App() {
                 loading={loading}
                 onMark={handleMark}
                 markedFrame={markedFrame}
+                allAnnotations={allAnnotations}
+                currentUsername={user.username}
               />
             </div>
 
@@ -369,6 +391,8 @@ export default function App() {
               markedFrame={markedFrame}
               onNext={advanceToNext}
               setCurrentFrame={setCurrentFrame}
+              allAnnotations={allAnnotations}
+              currentUsername={user.username}
             />
           </div>
         ) : (

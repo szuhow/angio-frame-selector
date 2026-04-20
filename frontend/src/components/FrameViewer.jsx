@@ -4,13 +4,14 @@ import {
   Repeat, ZoomIn, ZoomOut, Maximize, SlidersHorizontal, RotateCcw,
   Scissors, X,
 } from 'lucide-react';
+import { getUserColor } from '../userColors';
 
 const SPEED_OPTIONS = [0.5, 1, 2, 5, 10, 15, 30];
 const ZOOM_STEP = 0.25;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
 
-export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loading, onMark, markedFrame }) {
+export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loading, onMark, markedFrame, allAnnotations = [], currentUsername }) {
   const [playing, setPlaying] = useState(false);
   const [fps, setFps] = useState(10);
   const [loop, setLoop] = useState(false);
@@ -231,8 +232,11 @@ export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loa
       <div
         ref={imgContainerRef}
         className={`flex-1 flex items-center justify-center bg-black rounded-xl overflow-hidden min-h-0 relative ring-2 ${
-          markedFrame !== null && currentFrame === markedFrame
-            ? 'ring-green-500'
+          allAnnotations.some((a) => a.frame_index === currentFrame)
+            ? (() => {
+                const match = allAnnotations.find((a) => a.frame_index === currentFrame);
+                return match ? getUserColor(match.user_id).ring : 'ring-transparent';
+              })()
             : 'ring-transparent'
         }`}
         style={{ cursor: zoom > 1 ? (isPanning.current ? 'grabbing' : 'grab') : 'default' }}
@@ -295,13 +299,27 @@ export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loa
           </div>
         )}
 
-        {/* Marked frame badge */}
-        {markedFrame !== null && currentFrame === markedFrame && (
-          <div className="absolute top-3 left-3 bg-green-600/90 text-white text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-semibold shadow-lg">
-            <Star className="w-3.5 h-3.5 fill-current" />
-            Klatka informatywna
-          </div>
-        )}
+        {/* Marked frame badges (all users on current frame) */}
+        {allAnnotations
+          .filter((a) => a.frame_index === currentFrame)
+          .map((ann) => {
+            const color = getUserColor(ann.user_id);
+            const isMe = ann.user_id === currentUsername;
+            return (
+              <div
+                key={ann.user_id}
+                className="absolute top-3 left-3 text-white text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-semibold shadow-lg"
+                style={{
+                  backgroundColor: color.hex + 'e6',
+                  top: `${12 + allAnnotations.filter((a) => a.frame_index === currentFrame).indexOf(ann) * 32}px`,
+                }}
+              >
+                <Star className="w-3.5 h-3.5 fill-current" />
+                {isMe ? 'Klatka informatywna' : ann.user_id}
+              </div>
+            );
+          })
+        }
       </div>
 
       {/* Image adjustments panel */}
@@ -401,15 +419,27 @@ export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loa
               className="w-full h-2 rounded-lg appearance-none cursor-pointer bg-gray-700 accent-blue-500 relative z-10"
             />
 
-            {/* Marker diamond on slider for marked frame */}
-            {markedFrame !== null && frameCount > 1 && (
-              <button
-                onClick={() => setCurrentFrame(markedFrame)}
-                className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-green-500 rounded-sm rotate-45 border-2 border-green-300 cursor-pointer hover:scale-125 transition-transform z-20 shadow-lg shadow-green-500/50"
-                style={{ left: `${(markedFrame / (frameCount - 1)) * 100}%` }}
-                title={`Klatka informatywna: ${markedFrame + 1}`}
-              />
-            )}
+            {/* Marker diamonds on slider for all annotated frames */}
+            {allAnnotations.map((ann) => {
+              if (frameCount <= 1) return null;
+              const color = getUserColor(ann.user_id);
+              const isMe = ann.user_id === currentUsername;
+              return (
+                <button
+                  key={ann.user_id}
+                  onClick={() => setCurrentFrame(ann.frame_index)}
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-sm rotate-45 border-2 cursor-pointer hover:scale-125 transition-transform z-20"
+                  style={{
+                    left: `${(ann.frame_index / (frameCount - 1)) * 100}%`,
+                    backgroundColor: color.hex,
+                    borderColor: color.hex + '99',
+                    boxShadow: `0 0 8px ${color.hex}80`,
+                    opacity: isMe ? 1 : 0.7,
+                  }}
+                  title={`${ann.user_id}: klatka ${ann.frame_index + 1}`}
+                />
+              );
+            })}
           </div>
 
           {/* Playback controls */}

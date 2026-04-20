@@ -86,6 +86,102 @@ def _db():
         raise
 
 
+def _migrate_unique_constraints() -> None:
+    """Migrate old tables with UNIQUE(patient_id, sequence_id) to UNIQUE(patient_id, sequence_id, user_id)."""
+    with _db() as cur:
+        for table, cols in [
+            ("annotations", "id, patient_id, sequence_id, frame_index, comment, user_id, created_at"),
+            ("skipped", "id, patient_id, sequence_id, reason, user_id, created_at"),
+        ]:
+            cur.execute(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table}'")
+            row = cur.fetchone()
+            if not row:
+                continue
+            ddl = row["sql"]
+            # Already migrated if user_id is in the UNIQUE constraint
+            if "UNIQUE(patient_id, sequence_id, user_id)" in ddl.replace(" ", ""):
+                continue
+            if "UNIQUE(patient_id,sequence_id)" not in ddl.replace(" ", ""):
+                continue
+            # Recreate table with new constraint
+            cur.execute(f"ALTER TABLE {table} RENAME TO _{table}_old")
+            if table == "annotations":
+                cur.execute("""
+                    CREATE TABLE annotations (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        patient_id  TEXT NOT NULL,
+                        sequence_id TEXT NOT NULL,
+                        frame_index INTEGER NOT NULL,
+                        comment     TEXT NOT NULL DEFAULT '',
+                        user_id     TEXT NOT NULL DEFAULT 'default',
+                        created_at  TEXT NOT NULL,
+                        UNIQUE(patient_id, sequence_id, user_id)
+                    )
+                """)
+            else:
+                cur.execute("""
+                    CREATE TABLE skipped (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        patient_id  TEXT NOT NULL,
+                        sequence_id TEXT NOT NULL,
+                        reason      TEXT NOT NULL DEFAULT '',
+                        user_id     TEXT NOT NULL DEFAULT 'default',
+                        created_at  TEXT NOT NULL,
+                        UNIQUE(patient_id, sequence_id, user_id)
+                    )
+                """)
+            cur.execute(f"INSERT INTO {table} ({cols}) SELECT {cols} FROM _{table}_old")
+            cur.execute(f"DROP TABLE _{table}_old")
+
+
+def _migrate_unique_constraints() -> None:
+    """Migrate old tables with UNIQUE(patient_id, sequence_id) to UNIQUE(patient_id, sequence_id, user_id)."""
+    with _db() as cur:
+        for table, cols in [
+            ("annotations", "id, patient_id, sequence_id, frame_index, comment, user_id, created_at"),
+            ("skipped", "id, patient_id, sequence_id, reason, user_id, created_at"),
+        ]:
+            cur.execute(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table}'")
+            row = cur.fetchone()
+            if not row:
+                continue
+            ddl = row["sql"]
+            # Already migrated if user_id is in the UNIQUE constraint
+            if "UNIQUE(patient_id, sequence_id, user_id)" in ddl.replace(" ", ""):
+                continue
+            if "UNIQUE(patient_id,sequence_id)" not in ddl.replace(" ", ""):
+                continue
+            # Recreate table with new constraint
+            cur.execute(f"ALTER TABLE {table} RENAME TO _{table}_old")
+            if table == "annotations":
+                cur.execute("""
+                    CREATE TABLE annotations (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        patient_id  TEXT NOT NULL,
+                        sequence_id TEXT NOT NULL,
+                        frame_index INTEGER NOT NULL,
+                        comment     TEXT NOT NULL DEFAULT '',
+                        user_id     TEXT NOT NULL DEFAULT 'default',
+                        created_at  TEXT NOT NULL,
+                        UNIQUE(patient_id, sequence_id, user_id)
+                    )
+                """)
+            else:
+                cur.execute("""
+                    CREATE TABLE skipped (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        patient_id  TEXT NOT NULL,
+                        sequence_id TEXT NOT NULL,
+                        reason      TEXT NOT NULL DEFAULT '',
+                        user_id     TEXT NOT NULL DEFAULT 'default',
+                        created_at  TEXT NOT NULL,
+                        UNIQUE(patient_id, sequence_id, user_id)
+                    )
+                """)
+            cur.execute(f"INSERT INTO {table} ({cols}) SELECT {cols} FROM _{table}_old")
+            cur.execute(f"DROP TABLE _{table}_old")
+
+
 def _init_db() -> None:
     """Create tables if they don't exist and migrate legacy JSON data."""
     with _db() as cur:
@@ -98,7 +194,7 @@ def _init_db() -> None:
                 comment     TEXT NOT NULL DEFAULT '',
                 user_id     TEXT NOT NULL DEFAULT 'default',
                 created_at  TEXT NOT NULL,
-                UNIQUE(patient_id, sequence_id)
+                UNIQUE(patient_id, sequence_id, user_id)
             )
         """)
         cur.execute("""
@@ -109,7 +205,7 @@ def _init_db() -> None:
                 reason      TEXT NOT NULL DEFAULT '',
                 user_id     TEXT NOT NULL DEFAULT 'default',
                 created_at  TEXT NOT NULL,
-                UNIQUE(patient_id, sequence_id)
+                UNIQUE(patient_id, sequence_id, user_id)
             )
         """)
         cur.execute("""
@@ -122,6 +218,9 @@ def _init_db() -> None:
                 created_at    TEXT NOT NULL
             )
         """)
+
+    # Migrate UNIQUE constraint from (patient_id, sequence_id) to (patient_id, sequence_id, user_id)
+    _migrate_unique_constraints()
 
     # Migrate from legacy annotations.json if present and DB is empty
     legacy = Path(__file__).resolve().parent.parent / "annotations.json"
@@ -527,8 +626,12 @@ def export_annotations(user: dict = Depends(get_current_user)):
         )
         skipped_list = [dict(r) for r in cur.fetchall()]
 
-    ann_map = {(a["patient_id"], a["sequence_id"]): a for a in annotations}
-    skip_map = {(s["patient_id"], s["sequence_id"]): s for s in skipped_list}
+    ann_map: dict[tuple[str, str], list[dict]] = {}
+    for a in annotations:
+        ann_map.setdefault((a["patient_id"], a["sequence_id"]), []).append(a)
+    skip_map: dict[tuple[str, str], list[dict]] = {}
+    for s in skipped_list:
+        skip_map.setdefault((s["patient_id"], s["sequence_id"]), []).append(s)
 
     result = []
     for p in patients_data:
@@ -541,16 +644,24 @@ def export_annotations(user: dict = Depends(get_current_user)):
                 "status": seq["status"],
             }
             if key in ann_map:
-                a = ann_map[key]
-                entry["informative_frame"] = a["frame_index"]
-                entry["comment"] = a["comment"]
-                entry["annotated_by"] = a["user_id"]
-                entry["annotated_at"] = a["created_at"]
-            elif key in skip_map:
-                s = skip_map[key]
-                entry["skip_reason"] = s["reason"]
-                entry["skipped_by"] = s["user_id"]
-                entry["skipped_at"] = s["created_at"]
+                entry["annotations"] = [
+                    {
+                        "informative_frame": a["frame_index"],
+                        "comment": a["comment"],
+                        "annotated_by": a["user_id"],
+                        "annotated_at": a["created_at"],
+                    }
+                    for a in ann_map[key]
+                ]
+            if key in skip_map:
+                entry["skips"] = [
+                    {
+                        "reason": s["reason"],
+                        "skipped_by": s["user_id"],
+                        "skipped_at": s["created_at"],
+                    }
+                    for s in skip_map[key]
+                ]
             patient["sequences"].append(entry)
         result.append(patient)
 
@@ -696,36 +807,32 @@ def list_annotations(user: dict = Depends(require_admin)):
 
 @app.get("/api/annotations/{patient_id}/{sequence_id:path}")
 def get_annotation(patient_id: str, sequence_id: str, user: dict = Depends(get_current_user)):
-    """Return annotation for a specific sequence (if exists)."""
+    """Return all annotations for a specific sequence (from all users)."""
     with _db() as cur:
         cur.execute(
-            "SELECT patient_id, sequence_id, frame_index, comment, user_id, created_at FROM annotations WHERE patient_id=? AND sequence_id=?",
+            "SELECT patient_id, sequence_id, frame_index, comment, user_id, created_at FROM annotations WHERE patient_id=? AND sequence_id=? ORDER BY created_at",
             (patient_id, sequence_id),
         )
-        row = cur.fetchone()
-        if row:
-            return {"type": "annotation", **dict(row)}
+        annotations = [{"type": "annotation", **dict(r)} for r in cur.fetchall()]
         cur.execute(
-            "SELECT patient_id, sequence_id, reason, user_id, created_at FROM skipped WHERE patient_id=? AND sequence_id=?",
+            "SELECT patient_id, sequence_id, reason, user_id, created_at FROM skipped WHERE patient_id=? AND sequence_id=? ORDER BY created_at",
             (patient_id, sequence_id),
         )
-        row = cur.fetchone()
-        if row:
-            return {"type": "skipped", **dict(row)}
-    return None
+        skipped = [{"type": "skipped", **dict(r)} for r in cur.fetchall()]
+    return {"annotations": annotations, "skipped": skipped}
 
 
 @app.post("/api/annotations")
 def create_annotation(body: AnnotationCreate, user: dict = Depends(require_annotator)):
     now = datetime.now(timezone.utc).isoformat()
     with _db() as cur:
-        cur.execute("DELETE FROM skipped WHERE patient_id=? AND sequence_id=?", (body.patient_id, body.sequence_id))
+        cur.execute("DELETE FROM skipped WHERE patient_id=? AND sequence_id=? AND user_id=?", (body.patient_id, body.sequence_id, user["username"]))
         cur.execute(
             """INSERT INTO annotations (patient_id, sequence_id, frame_index, comment, user_id, created_at)
                VALUES (?,?,?,?,?,?)
-               ON CONFLICT(patient_id, sequence_id)
+               ON CONFLICT(patient_id, sequence_id, user_id)
                DO UPDATE SET frame_index=excluded.frame_index, comment=excluded.comment,
-                             user_id=excluded.user_id, created_at=excluded.created_at""",
+                             created_at=excluded.created_at""",
             (body.patient_id, body.sequence_id, body.frame_index, body.comment, user["username"], now),
         )
     return {"status": "ok", "frame_index": body.frame_index}
@@ -735,12 +842,12 @@ def create_annotation(body: AnnotationCreate, user: dict = Depends(require_annot
 def skip_sequence(body: SkipCreate, user: dict = Depends(require_annotator)):
     now = datetime.now(timezone.utc).isoformat()
     with _db() as cur:
-        cur.execute("DELETE FROM annotations WHERE patient_id=? AND sequence_id=?", (body.patient_id, body.sequence_id))
+        cur.execute("DELETE FROM annotations WHERE patient_id=? AND sequence_id=? AND user_id=?", (body.patient_id, body.sequence_id, user["username"]))
         cur.execute(
             """INSERT INTO skipped (patient_id, sequence_id, reason, user_id, created_at)
                VALUES (?,?,?,?,?)
-               ON CONFLICT(patient_id, sequence_id)
-               DO UPDATE SET reason=excluded.reason, user_id=excluded.user_id, created_at=excluded.created_at""",
+               ON CONFLICT(patient_id, sequence_id, user_id)
+               DO UPDATE SET reason=excluded.reason, created_at=excluded.created_at""",
             (body.patient_id, body.sequence_id, body.reason, user["username"], now),
         )
     return {"status": "ok"}
@@ -802,8 +909,12 @@ def export_coco(user: dict = Depends(get_current_user)):
         )
         skipped_rows = [dict(r) for r in cur.fetchall()]
 
-    ann_map = {(a["patient_id"], a["sequence_id"]): a for a in annotations_rows}
-    skip_map = {(s["patient_id"], s["sequence_id"]): s for s in skipped_rows}
+    ann_map: dict[tuple[str, str], list[dict]] = {}
+    for a in annotations_rows:
+        ann_map.setdefault((a["patient_id"], a["sequence_id"]), []).append(a)
+    skip_map: dict[tuple[str, str], list[dict]] = {}
+    for s in skipped_rows:
+        skip_map.setdefault((s["patient_id"], s["sequence_id"]), []).append(s)
 
     categories = [
         {"id": 1, "name": "key_frame", "supercategory": "frame_classification"},
@@ -832,32 +943,32 @@ def export_coco(user: dict = Depends(get_current_user)):
             images.append(image_entry)
 
             if key in ann_map:
-                a = ann_map[key]
-                ann_id += 1
-                coco_annotations.append({
-                    "id": ann_id,
-                    "image_id": img_id,
-                    "category_id": 1,
-                    "attributes": {
-                        "frame_index": a["frame_index"],
-                        "comment": a["comment"],
-                        "annotated_by": a["user_id"],
-                        "annotated_at": a["created_at"],
-                    },
-                })
-            elif key in skip_map:
-                s = skip_map[key]
-                ann_id += 1
-                coco_annotations.append({
-                    "id": ann_id,
-                    "image_id": img_id,
-                    "category_id": 2,
-                    "attributes": {
-                        "reason": s["reason"],
-                        "skipped_by": s["user_id"],
-                        "skipped_at": s["created_at"],
-                    },
-                })
+                for a in ann_map[key]:
+                    ann_id += 1
+                    coco_annotations.append({
+                        "id": ann_id,
+                        "image_id": img_id,
+                        "category_id": 1,
+                        "attributes": {
+                            "frame_index": a["frame_index"],
+                            "comment": a["comment"],
+                            "annotated_by": a["user_id"],
+                            "annotated_at": a["created_at"],
+                        },
+                    })
+            if key in skip_map:
+                for s in skip_map[key]:
+                    ann_id += 1
+                    coco_annotations.append({
+                        "id": ann_id,
+                        "image_id": img_id,
+                        "category_id": 2,
+                        "attributes": {
+                            "reason": s["reason"],
+                            "skipped_by": s["user_id"],
+                            "skipped_at": s["created_at"],
+                        },
+                    })
 
     now = datetime.now(timezone.utc).isoformat()
     return {

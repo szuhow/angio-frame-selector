@@ -1,5 +1,6 @@
 import React from 'react';
-import { CheckCircle, XCircle, MessageSquare, Star, ArrowRight } from 'lucide-react';
+import { CheckCircle, XCircle, MessageSquare, Star, ArrowRight, Users } from 'lucide-react';
+import { getUserColor } from '../userColors';
 
 export default function ActionPanel({
   patientId,
@@ -13,7 +14,11 @@ export default function ActionPanel({
   markedFrame,
   onNext,
   setCurrentFrame,
+  allAnnotations = [],
+  currentUsername,
 }) {
+  const otherAnnotations = allAnnotations.filter((a) => a.user_id !== currentUsername);
+
   return (
     <aside className="w-80 shrink-0 border-l border-gray-800 bg-gray-900/50 flex flex-col p-4 gap-4">
       {/* Current selection info */}
@@ -39,23 +44,59 @@ export default function ActionPanel({
         </div>
       </div>
 
-      {/* Marked frame indicator */}
-      {markedFrame !== null && (
-        <div className="bg-green-900/30 border border-green-700/50 rounded-lg p-3 space-y-2">
-          <div className="flex items-center gap-2 text-green-400 text-sm font-semibold">
-            <Star className="w-4 h-4 fill-current" />
-            Oznaczona klatka informatywna
+      {/* Current user's marked frame */}
+      {markedFrame !== null && (() => {
+        const color = getUserColor(currentUsername);
+        return (
+          <div className={`${color.bg} border ${color.border} rounded-lg p-3 space-y-2`}>
+            <div className={`flex items-center gap-2 ${color.text} text-sm font-semibold`}>
+              <Star className="w-4 h-4 fill-current" />
+              Twoja klatka informatywna
+            </div>
+            <div className="flex items-center justify-between">
+              <span className={`${color.textMuted} text-sm`}>Klatka nr</span>
+              <span className={`${color.textLight} font-mono font-bold text-lg`}>{markedFrame + 1}</span>
+            </div>
+            <button
+              onClick={() => setCurrentFrame(markedFrame)}
+              className={`w-full text-xs ${color.text} hover:${color.textLight} underline underline-offset-2 transition-colors`}
+            >
+              Przejdź do oznaczonej klatki
+            </button>
           </div>
-          <div className="flex items-center justify-between">
-            <span className="text-green-300/70 text-sm">Klatka nr</span>
-            <span className="text-green-300 font-mono font-bold text-lg">{markedFrame + 1}</span>
+        );
+      })()}
+
+      {/* Other users' annotations */}
+      {otherAnnotations.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-gray-400 uppercase tracking-wider">
+            <Users className="w-3.5 h-3.5" />
+            Inni użytkownicy ({otherAnnotations.length})
+          </h3>
+          <div className="space-y-1.5">
+            {otherAnnotations.map((ann) => {
+              const color = getUserColor(ann.user_id);
+              return (
+                <button
+                  key={ann.user_id}
+                  onClick={() => setCurrentFrame(ann.frame_index)}
+                  className={`w-full ${color.bg} border ${color.border} rounded-lg p-2.5 flex items-center justify-between hover:brightness-125 transition-all text-left`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: color.hex }}
+                    />
+                    <span className={`${color.textLight} text-sm truncate`}>{ann.user_id}</span>
+                  </div>
+                  <span className={`${color.textLight} font-mono text-sm font-bold shrink-0 ml-2`}>
+                    #{ann.frame_index + 1}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <button
-            onClick={() => setCurrentFrame(markedFrame)}
-            className="w-full text-xs text-green-400 hover:text-green-300 underline underline-offset-2 transition-colors"
-          >
-            Przejdź do oznaczonej klatki
-          </button>
         </div>
       )}
 
