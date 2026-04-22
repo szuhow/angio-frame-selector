@@ -9,6 +9,7 @@ import {
   setToken, getToken,
   fetchPatients, fetchFramesBulk, fetchSequenceAnnotation,
   submitAnnotation, submitSkip, login as apiLogin, exportCoco,
+  fetchDatasets,
 } from './api';
 import { Heart, LogOut, Shield, Download } from 'lucide-react';
 
@@ -46,6 +47,11 @@ export default function App() {
   const isResizing = useRef(false);
 
   // App state
+  const [datasets, setDatasets] = useState([]);
+  const [selectedDataset, setSelectedDataset] = useState(() => {
+    const v = localStorage.getItem('ks_dataset_id');
+    return v ? Number(v) : null;
+  });
   const [patients, setPatients] = useState([]);
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [selectedSequence, setSelectedSequence] = useState(null);
@@ -140,11 +146,39 @@ export default function App() {
     setFrames([]);
   }, []);
 
-  // Load patients
+  // Load available datasets for this user
   useEffect(() => {
     if (!user) return;
-    fetchPatients().then(setPatients).catch(console.error);
-  }, [refreshKey, user]);
+    fetchDatasets()
+      .then((ds) => {
+        setDatasets(ds);
+        setSelectedDataset((prev) => {
+          if (prev != null && ds.some((d) => d.id === prev)) return prev;
+          return ds.length > 0 ? ds[0].id : null;
+        });
+      })
+      .catch(console.error);
+  }, [user, refreshKey]);
+
+  // Persist selected dataset
+  useEffect(() => {
+    if (selectedDataset != null) localStorage.setItem('ks_dataset_id', String(selectedDataset));
+    else localStorage.removeItem('ks_dataset_id');
+  }, [selectedDataset]);
+
+  // Load patients scoped to selected dataset
+  useEffect(() => {
+    if (!user) return;
+    if (selectedDataset == null) { setPatients([]); return; }
+    fetchPatients(selectedDataset).then(setPatients).catch(console.error);
+  }, [refreshKey, user, selectedDataset]);
+
+  // Clear sequence selection when dataset changes
+  useEffect(() => {
+    setSelectedPatient(null);
+    setSelectedSequence(null);
+    setFrames([]);
+  }, [selectedDataset]);
 
   // Load frames when sequence is selected
   useEffect(() => {
@@ -161,8 +195,8 @@ export default function App() {
     setAllAnnotations([]);
 
     Promise.all([
-      fetchFramesBulk(selectedPatient, selectedSequence),
-      fetchSequenceAnnotation(selectedPatient, selectedSequence).catch(() => null),
+      fetchFramesBulk(selectedDataset, selectedPatient, selectedSequence),
+      fetchSequenceAnnotation(selectedDataset, selectedPatient, selectedSequence).catch(() => null),
     ])
       .then(([data, result]) => {
         const blobUrls = data.frames.map((b64) => {
@@ -192,7 +226,7 @@ export default function App() {
         return [];
       });
     };
-  }, [selectedPatient, selectedSequence, user]);
+  }, [selectedPatient, selectedSequence, selectedDataset, user]);
 
   const selectSequence = useCallback((patientId, seqId) => {
     setSelectedPatient(patientId);
@@ -200,7 +234,8 @@ export default function App() {
   }, []);
 
   const advanceToNext = useCallback(() => {
-    fetchPatients().then((pts) => {
+    if (selectedDataset == null) return;
+    fetchPatients(selectedDataset).then((pts) => {
       setPatients(pts);
       const curPatient = pts.find((p) => p.patient_id === selectedPatient);
       if (curPatient) {
@@ -222,11 +257,12 @@ export default function App() {
       setSelectedPatient(null);
       setSelectedSequence(null);
     });
-  }, [selectedPatient, selectedSequence, selectSequence]);
+  }, [selectedPatient, selectedSequence, selectSequence, selectedDataset]);
 
   const handleMark = useCallback(async () => {
-    if (!selectedPatient || !selectedSequence) return;
+    if (!selectedPatient || !selectedSequence || selectedDataset == null) return;
     await submitAnnotation({
+      dataset_id: selectedDataset,
       patient_id: selectedPatient,
       sequence_id: selectedSequence,
       frame_index: currentFrame,
@@ -246,11 +282,12 @@ export default function App() {
       ];
     });
     setRefreshKey((k) => k + 1);
-  }, [selectedPatient, selectedSequence, currentFrame, comment, user]);
+  }, [selectedPatient, selectedSequence, currentFrame, comment, user, selectedDataset]);
 
   const handleSkip = useCallback(async () => {
-    if (!selectedPatient || !selectedSequence) return;
+    if (!selectedPatient || !selectedSequence || selectedDataset == null) return;
     await submitSkip({
+      dataset_id: selectedDataset,
       patient_id: selectedPatient,
       sequence_id: selectedSequence,
       reason: comment || 'Zła jakość',
@@ -258,11 +295,11 @@ export default function App() {
     setAllAnnotations((prev) => prev.filter((a) => a.user_id !== user.username));
     setRefreshKey((k) => k + 1);
     advanceToNext();
-  }, [selectedPatient, selectedSequence, comment, advanceToNext, user]);
+  }, [selectedPatient, selectedSequence, comment, advanceToNext, user, selectedDataset]);
 
   const handleExportCoco = useCallback(async () => {
     try {
-      const data = await exportCoco();
+      const data = await exportCoco(selectedDataset);
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -273,7 +310,7 @@ export default function App() {
     } catch (err) {
       console.error('Export failed:', err);
     }
-  }, []);
+  }, [selectedDataset]);
 
   // Auth checking spinner
   if (authChecking) {
@@ -292,12 +329,18 @@ export default function App() {
   return (
     <div className="flex h-screen overflow-hidden">
       {showAdmin && (
-        <AdminPanel token={getToken()} onClose={() => setShowAdmin(false)} />
+        <AdminPanel
+          onClose={() => setShowAdmin(false)}
+          onDatasetsChanged={() => setRefreshKey((k) => k + 1)}
+        />
       )}
 
       {/* Sidebar */}
       <div className="flex shrink-0" style={{ width: sidebarCollapsed ? 40 : sidebarWidth }}>
         <Sidebar
+          datasets={datasets}
+          selectedDataset={selectedDataset}
+          onSelectDataset={setSelectedDataset}
           patients={patients}
           selectedPatient={selectedPatient}
           selectedSequence={selectedSequence}
@@ -332,7 +375,7 @@ export default function App() {
             </h1>
           </div>
           <div className="flex items-center gap-4">
-            <StatsBar refreshKey={refreshKey} />
+            <StatsBar refreshKey={refreshKey} datasetId={selectedDataset} />
             <div className="flex items-center gap-2 ml-4 border-l border-gray-800 pl-4">
               <button
                 onClick={handleExportCoco}

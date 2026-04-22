@@ -16,7 +16,17 @@ const STATUS_ICON = {
   todo: <Circle className="w-4 h-4 text-gray-600 shrink-0" />,
 };
 
-export default function Sidebar({ patients, selectedPatient, selectedSequence, onSelect, collapsed, onToggleCollapse }) {
+export default function Sidebar({
+  datasets = [],
+  selectedDataset,
+  onSelectDataset,
+  patients,
+  selectedPatient,
+  selectedSequence,
+  onSelect,
+  collapsed,
+  onToggleCollapse,
+}) {
   const [expanded, setExpanded] = useState({});
 
   const toggle = (id) =>
@@ -52,11 +62,30 @@ export default function Sidebar({ patients, selectedPatient, selectedSequence, o
           <ChevronLeft className="w-4 h-4 text-gray-400" />
         </button>
       </div>
+      {datasets.length > 0 && (
+        <div className="px-4 py-2 border-b border-gray-800">
+          <label className="text-xs text-gray-500 uppercase tracking-wider block mb-1">Zbiór danych</label>
+          <select
+            value={selectedDataset ?? ''}
+            onChange={(e) => onSelectDataset && onSelectDataset(Number(e.target.value))}
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500"
+          >
+            {datasets.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {datasets.length === 0 && (
+        <div className="px-4 py-3 border-b border-gray-800 text-xs text-gray-500">
+          Brak przypisanych zbiorów danych.<br />
+          Skontaktuj się z administratorem.
+        </div>
+      )}
       <nav className="flex-1 overflow-y-auto py-2">
         {patients.length === 0 && (
           <p className="px-4 py-8 text-sm text-gray-600 text-center">
-            Brak danych.<br />
-            Umieść pliki w <code>backend/data/</code>
+            Brak danych w tym zbiorze.
           </p>
         )}
         {patients.map((patient) => {

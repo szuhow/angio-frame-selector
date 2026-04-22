@@ -22,6 +22,8 @@ COPY . .
 
 ENV PATH="/app/.venv/bin:$PATH" \
     DATA_DIR=/app/data \
+    LIBRARY_DIR=/app/library \
+    EXPORTS_DIR=/app/exports \
     DB_PATH=/app/db/keyselector.db
 
 EXPOSE 8000

@@ -42,7 +42,7 @@ Frontend nie wymaga osobnego pliku env w obecnej konfiguracji. W developmentcie 
    - frontend: `http://localhost:3000`
    - backend API: `http://localhost:8000`
 
-Domyślnie dane wejściowe są montowane z `backend/data/`, a baza SQLite jest trzymana w wolumenie Dockera `db-data`.
+Domyślnie baza SQLite jest trzymana w wolumenie Dockera `db-data`, wgrane zbiory danych w wolumenie `library-data` (`/app/library`), a wersjonowane eksporty w `exports-data` (`/app/exports`). Dane nie są już montowane z hosta – nowe zbiory dodaje administrator z poziomu interfejsu aplikacji.
 
 Compose buduje obrazy natywnie dla architektury hosta. Na Apple Silicon daje to obrazy `arm64`, a na typowym serwerze Ubuntu obrazy `amd64`.
 
@@ -120,13 +120,62 @@ Najważniejsze zmienne używane przez kontenery i backend:
 
 - `BACKEND_PORT` – port wystawiany lokalnie dla API
 - `FRONTEND_PORT` – port wystawiany lokalnie dla frontendu
-- `HOST_DATA_DIR` – katalog z danymi DICOM/PNG po stronie hosta
-- `CONTAINER_DATA_DIR` – ścieżka danych wewnątrz kontenera backendu
+- `LIBRARY_DIR` – katalog biblioteki zbiorów wewnątrz kontenera (domyślnie `/app/library`)
+- `EXPORTS_DIR` – katalog przechowujący wersjonowane eksporty (domyślnie `/app/exports`)
+- `MAX_UPLOAD_BYTES` – maksymalny rozmiar wgrywanego ZIP-a ze zbiorem (domyślnie 10 GiB)
 - `CONTAINER_DB_PATH` – ścieżka do pliku SQLite wewnątrz kontenera
 - `JWT_SECRET` – sekret do podpisywania tokenów JWT
 - `JWT_EXPIRY_HOURS` – czas ważności tokenów
 
 Zmienne architektury obrazu nie są ustawiane w `.env.example`. Domyślny build używa architektury hosta, a cross-build pod `amd64` najlepiej wymuszać jednorazowo przez `DOCKER_DEFAULT_PLATFORM=linux/amd64`.
+
+## Zarządzanie zbiorami danych (admin)
+
+Administrator zarządza zbiorami danych z panelu w aplikacji (zakładka **Zbiory danych**):
+
+- **Rejestracja istniejącego katalogu** – wskazujesz folder leżący bezpośrednio w `LIBRARY_DIR` (np. skopiowany tam przez operatora infrastruktury). Backend wykryje nieprzypisane podkatalogi i udostępni je na liście.
+- **Upload archiwum ZIP** – wgrywasz plik ZIP przez interfejs. Archiwum jest weryfikowane (zip-slip, dozwolone rozszerzenia `.dcm`, `.png`, limit `MAX_UPLOAD_BYTES`) i rozpakowywane do `LIBRARY_DIR/<slug>`.
+- **Usunięcie zbioru** – odpina wszystkie przypisania i kasuje pliki na dysku.
+
+Każdy zbiór ma unikalny `slug` używany w ścieżkach eksportów i katalogów.
+
+### Duże zbiory – bind-mount katalogu hosta
+
+Jeśli masz wiele GB DICOM-ów, nie musisz ich kopiować do kontenera ani przesyłać ZIP-em. Ustaw w `.env`:
+
+```env
+HOST_LIBRARY_DIR=/absolute/path/to/dicom-library
+# opcjonalnie, żeby eksporty też trafiały na hosta:
+HOST_EXPORTS_DIR=/absolute/path/to/exports
+```
+
+Struktura katalogu: `HOST_LIBRARY_DIR/<nazwa-zbioru>/...pliki DICOM...`. Po `docker compose up -d` w panelu admina → **Zbiory danych** → sekcja „Biblioteka (niezarejestrowane)” pojawią się podfoldery do jednoklikowej rejestracji. Pliki pozostają na hoście, kontener czyta je in-place. Jeśli nie ustawisz tych zmiennych, używany jest nazwany wolumen Dockera i dane wgrywa się wyłącznie przez ZIP.
+
+### Przypisywanie zbiorów użytkownikom
+
+W zakładce **Przypisania** admin przypisuje zbiory danych do konkretnych kont:
+
+- Użytkownicy widzą wyłącznie zbiory, do których zostali przypisani.
+- Administratorzy widzą wszystkie zbiory.
+- Wszystkie endpointy API wymagają parametru/ciała `dataset_id`; próba dostępu do nieprzypisanego zbioru zwraca `404` (ukrywamy samo istnienie zbioru).
+- Adnotacje i skipy są zakresowane po zbiorach – `UNIQUE(dataset_id, patient_id, sequence_id, user_id)`.
+
+### Wersjonowane eksporty
+
+W zakładce **Wersje eksportu** admin tworzy migawki adnotacji dla wybranego zbioru:
+
+- Formaty: `annotations-json` oraz `coco`.
+- Wersja musi pasować do `^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$` (np. `v1.0.0`).
+- Plik jest serializowany kanonicznie (`sort_keys=True`) i hashowany SHA-256; hash jest zwracany w nagłówku `ETag` przy pobraniu.
+- Próba utworzenia wersji o tej samej nazwie i formacie dla tego samego zbioru zwraca `409`.
+- Fizyczny plik ląduje w `EXPORTS_DIR/<slug>/<version>/<format>.json`. Jeśli zostanie ręcznie usunięty, pobranie zwraca `410`.
+
+Kluczowe endpointy:
+
+- `POST /api/export/versions` – utworzenie wersji (admin)
+- `GET /api/export/versions?dataset_id=…` – lista wersji widocznych dla użytkownika
+- `GET /api/export/versions/{id}/download` – pobranie migawki (z `ETag`)
+- `DELETE /api/export/versions/{id}` – usunięcie wersji (admin)
 
 ## Kontrola wersji
 

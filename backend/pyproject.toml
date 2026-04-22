@@ -16,3 +16,7 @@ dependencies = [
 
 [tool.uv]
 package = false
+dev-dependencies = [
+  "pytest>=8.3.0",
+  "httpx>=0.27.0",
+]

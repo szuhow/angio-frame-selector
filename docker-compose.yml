@@ -4,11 +4,18 @@ services:
       context: ./backend
       network: host
     volumes:
-      - ${HOST_DATA_DIR:-./backend/data}:${CONTAINER_DATA_DIR:-/app/data}
+      # Jeśli ustawisz HOST_LIBRARY_DIR w .env na ścieżkę hosta (np. /mnt/dicom),
+      # zbiory DICOM będą czytane in-place z hosta (bez kopiowania).
+      # W przeciwnym razie używany jest nazwany wolumen `library-data` i dane
+      # trafiają do środka przez upload ZIP w panelu admina.
+      - ${HOST_LIBRARY_DIR:-library-data}:/app/library
+      - ${HOST_EXPORTS_DIR:-exports-data}:/app/exports
       - db-data:/app/db
     environment:
-      DATA_DIR: ${CONTAINER_DATA_DIR:-/app/data}
+      LIBRARY_DIR: /app/library
+      EXPORTS_DIR: /app/exports
       DB_PATH: ${CONTAINER_DB_PATH:-/app/db/keyselector.db}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10737418240}
       JWT_SECRET: ${JWT_SECRET:-replace-me-before-production}
       JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
     ports:
@@ -27,3 +34,5 @@ services:
 
 volumes:
   db-data:
+  library-data:
+  exports-data:

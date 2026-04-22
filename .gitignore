@@ -19,10 +19,12 @@ frontend/dist/
 # Local runtime state
 backend/data/
 backend/old/
+backend/tests/
 keyselector.db
 keyselector.db-shm
 keyselector.db-wal
 annotations.json
+*.bak
 *.log
 
 # Environment files

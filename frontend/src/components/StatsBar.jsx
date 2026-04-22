@@ -2,12 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { fetchStats } from '../api';
 import { BarChart3 } from 'lucide-react';
 
-export default function StatsBar({ refreshKey }) {
+export default function StatsBar({ refreshKey, datasetId }) {
   const [stats, setStats] = useState(null);
 
   useEffect(() => {
-    fetchStats().then(setStats).catch(() => {});
-  }, [refreshKey]);
+    fetchStats(datasetId).then(setStats).catch(() => {});
+  }, [refreshKey, datasetId]);
 
   if (!stats) return null;
 
