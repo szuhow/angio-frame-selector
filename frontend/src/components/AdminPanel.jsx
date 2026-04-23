@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Plus, Trash2, Key, Copy, Shield, X, Database, Link2, Tag } from 'lucide-react';
+import { Users, Plus, Trash2, Key, Copy, Shield, X, Database, Link2, Tag, Info, ArrowUp, ArrowDown, RotateCcw } from 'lucide-react';
 import {
   adminListUsers,
   adminCreateUser,
   adminDeleteUser,
   adminRegenerateToken,
+  fetchMetadataConfig,
+  updateMetadataConfig,
 } from '../api';
 import DatasetManager from './DatasetManager';
 import UserDatasetAssignments from './UserDatasetAssignments';
@@ -17,11 +19,21 @@ const ROLE_COLORS = {
   viewer: 'bg-gray-800 text-gray-400 border-gray-700',
 };
 
+const DEFAULT_METADATA_FIELDS = [
+  { tag: '00181510', label: 'Primary angle' },
+  { tag: '00181511', label: 'Secondary angle' },
+  { tag: '00180060', label: 'kVp' },
+  { tag: '00181151', label: 'Tube current' },
+  { tag: '00181063', label: 'Frame time' },
+  { tag: '00080020', label: 'Study date' },
+];
+
 const TABS = [
   { id: 'users', label: 'Użytkownicy', icon: Users },
   { id: 'datasets', label: 'Zbiory danych', icon: Database },
   { id: 'assignments', label: 'Przypisania', icon: Link2 },
   { id: 'exports', label: 'Wersje eksportu', icon: Tag },
+  { id: 'metadata', label: 'Metadane', icon: Info },
 ];
 
 function UsersTab() {
@@ -140,6 +152,168 @@ function UsersTab() {
   );
 }
 
+function normalizeTagInput(raw) {
+  const cleaned = raw.replace(/[\s(),]/g, '').toUpperCase();
+  if (!/^[0-9A-F]{8}$/.test(cleaned)) return null;
+  return cleaned;
+}
+
+function MetadataTab() {
+  const [fields, setFields] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [newTag, setNewTag] = useState('');
+  const [newLabel, setNewLabel] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchMetadataConfig();
+      setFields(Array.isArray(data.fields) ? data.fields : []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const save = async (nextFields) => {
+    setSaving(true);
+    setError(''); setSuccess('');
+    try {
+      const data = await updateMetadataConfig(nextFields);
+      setFields(Array.isArray(data.fields) ? data.fields : []);
+      setSuccess('Zapisano');
+      setTimeout(() => setSuccess(''), 1500);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addField = async (e) => {
+    e.preventDefault();
+    setError('');
+    const tag = normalizeTagInput(newTag);
+    if (!tag) { setError('Tag musi być 8-znakowym szesnastkowym identyfikatorem (np. 0018,1510)'); return; }
+    if (fields.some((f) => f.tag === tag)) { setError('Ten tag jest już dodany'); return; }
+    const label = newLabel.trim();
+    const next = [...fields, label ? { tag, label } : { tag }];
+    setNewTag(''); setNewLabel('');
+    await save(next);
+  };
+
+  const removeField = async (tag) => {
+    await save(fields.filter((f) => f.tag !== tag));
+  };
+
+  const moveField = async (idx, delta) => {
+    const target = idx + delta;
+    if (target < 0 || target >= fields.length) return;
+    const next = fields.slice();
+    [next[idx], next[target]] = [next[target], next[idx]];
+    await save(next);
+  };
+
+  const updateLabel = async (tag, label) => {
+    const next = fields.map((f) => (f.tag === tag ? (label.trim() ? { tag, label: label.trim() } : { tag }) : f));
+    await save(next);
+  };
+
+  const resetToDefaults = async () => {
+    if (!confirm('Przywrócić domyślną listę pól metadanych?')) return;
+    await save(DEFAULT_METADATA_FIELDS);
+  };
+
+  return (
+    <div className="space-y-4">
+      {error && (
+        <div className="text-red-400 text-sm bg-red-900/20 border border-red-800/50 rounded-lg px-3 py-2">
+          {error} <button onClick={() => setError('')} className="ml-2 text-red-500 hover:text-red-300">✕</button>
+        </div>
+      )}
+      {success && (
+        <div className="text-green-400 text-sm bg-green-900/20 border border-green-800/50 rounded-lg px-3 py-2">
+          {success}
+        </div>
+      )}
+
+      <div className="text-xs text-gray-500">
+        Lista tagów DICOM pokazywanych w panelu „Metadane” w widoku sekwencji. Obsługiwane formaty: <code className="text-gray-400">00181510</code>, <code className="text-gray-400">0018,1510</code>, <code className="text-gray-400">(0018,1510)</code>.
+      </div>
+
+      <form onSubmit={addField} className="bg-gray-800/50 rounded-lg p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+          <Plus className="w-4 h-4" /> Dodaj pole
+        </h3>
+        <div className="grid grid-cols-[1fr_2fr_auto] gap-3">
+          <input type="text" placeholder="Tag (np. 0018,1510)" value={newTag} onChange={(e) => setNewTag(e.target.value)}
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-blue-500" required />
+          <input type="text" placeholder="Etykieta (opcjonalnie)" value={newLabel} onChange={(e) => setNewLabel(e.target.value)}
+            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+          <button type="submit" disabled={saving}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm rounded-lg font-medium transition-colors">
+            Dodaj
+          </button>
+        </div>
+      </form>
+
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+            <Info className="w-4 h-4" /> Pola ({fields.length})
+          </h3>
+          <button onClick={resetToDefaults} disabled={saving}
+            className="text-xs text-gray-400 hover:text-white flex items-center gap-1 disabled:opacity-50">
+            <RotateCcw className="w-3.5 h-3.5" /> Przywróć domyślne
+          </button>
+        </div>
+        {loading ? (
+          <div className="text-gray-500 text-sm">Ładowanie…</div>
+        ) : fields.length === 0 ? (
+          <div className="text-gray-500 text-sm">Brak pól. Dodaj pierwsze pole powyżej.</div>
+        ) : (
+          <div className="space-y-2">
+            {fields.map((f, idx) => (
+              <div key={f.tag} className="bg-gray-800/50 rounded-lg p-3 flex items-center gap-3">
+                <code className="text-xs text-gray-400 font-mono w-20 shrink-0">{f.tag}</code>
+                <input
+                  type="text"
+                  defaultValue={f.label || ''}
+                  placeholder="(domyślna etykieta)"
+                  onBlur={(e) => {
+                    if ((e.target.value || '') !== (f.label || '')) updateLabel(f.tag, e.target.value);
+                  }}
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500"
+                />
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => moveField(idx, -1)} disabled={idx === 0 || saving}
+                    className="p-1 hover:bg-gray-700 rounded text-gray-500 hover:text-gray-200 disabled:opacity-30" title="W górę">
+                    <ArrowUp className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => moveField(idx, 1)} disabled={idx === fields.length - 1 || saving}
+                    className="p-1 hover:bg-gray-700 rounded text-gray-500 hover:text-gray-200 disabled:opacity-30" title="W dół">
+                    <ArrowDown className="w-3.5 h-3.5" />
+                  </button>
+                  <button onClick={() => removeField(f.tag)} disabled={saving}
+                    className="p-1 hover:bg-gray-700 rounded text-gray-500 hover:text-red-400 disabled:opacity-30" title="Usuń">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function AdminPanel({ onClose, onDatasetsChanged }) {
   const [tab, setTab] = useState('users');
 
@@ -181,6 +355,7 @@ export default function AdminPanel({ onClose, onDatasetsChanged }) {
           {tab === 'datasets' && <DatasetManager onChange={onDatasetsChanged} />}
           {tab === 'assignments' && <UserDatasetAssignments />}
           {tab === 'exports' && <ExportVersions />}
+          {tab === 'metadata' && <MetadataTab />}
         </div>
       </div>
     </div>

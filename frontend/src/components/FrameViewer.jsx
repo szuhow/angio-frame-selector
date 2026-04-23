@@ -2,16 +2,17 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Play, Pause, SkipBack, SkipForward, Gauge, Star,
   Repeat, ZoomIn, ZoomOut, Maximize, SlidersHorizontal, RotateCcw,
-  Scissors, X,
+  Scissors, X, Info,
 } from 'lucide-react';
 import { getUserColor } from '../userColors';
+import { fetchSequenceMetadata } from '../api';
 
 const SPEED_OPTIONS = [0.5, 1, 2, 5, 10, 15, 30];
 const ZOOM_STEP = 0.25;
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 8;
 
-export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loading, onMark, markedFrame, allAnnotations = [], currentUsername }) {
+export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loading, onMark, markedFrame, allAnnotations = [], currentUsername, datasetId, patientId, sequenceId, hasMetadata = false }) {
   const [playing, setPlaying] = useState(false);
   const [fps, setFps] = useState(10);
   const [loop, setLoop] = useState(false);
@@ -37,6 +38,12 @@ export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loa
   const [inPoint, setInPoint] = useState(null);
   const [outPoint, setOutPoint] = useState(null);
   const hasRange = inPoint !== null && outPoint !== null;
+
+  // Sequence metadata (DICOM tags / sidecar)
+  const [showInfo, setShowInfo] = useState(false);
+  const [metaFields, setMetaFields] = useState([]);
+  const [metaLoading, setMetaLoading] = useState(false);
+  const [metaError, setMetaError] = useState('');
 
   const frameCount = frames.length;
 
@@ -73,6 +80,27 @@ export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loa
     setInPoint(null);
     setOutPoint(null);
   }, [frames]);
+
+  // Reset / fetch metadata when sequence changes
+  useEffect(() => {
+    setMetaFields([]);
+    setMetaError('');
+    if (!showInfo) return;
+    if (datasetId == null || !patientId || !sequenceId) return;
+    let cancelled = false;
+    setMetaLoading(true);
+    fetchSequenceMetadata(datasetId, patientId, sequenceId)
+      .then((data) => {
+        if (cancelled) return;
+        setMetaFields(Array.isArray(data.fields) ? data.fields : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setMetaError(err.message || 'Błąd pobierania metadanych');
+      })
+      .finally(() => { if (!cancelled) setMetaLoading(false); });
+    return () => { cancelled = true; };
+  }, [showInfo, datasetId, patientId, sequenceId]);
 
   // Playback with loop + in/out range support
   useEffect(() => {
@@ -270,6 +298,38 @@ export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loa
         {frameCount > 0 && (
           <div className="absolute top-3 right-3 bg-black/70 text-white text-sm px-3 py-1 rounded-lg font-mono">
             {currentFrame + 1} / {frameCount}
+          </div>
+        )}
+
+        {/* Metadata panel */}
+        {showInfo && hasMetadata && (
+          <div className="absolute top-14 right-3 max-w-xs bg-black/80 border border-gray-700 rounded-lg text-xs text-gray-200 shadow-lg overflow-hidden">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700/70 bg-gray-900/60">
+              <div className="flex items-center gap-2">
+                <Info className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="font-semibold">Metadane</span>
+              </div>
+              <button
+                onClick={() => setShowInfo(false)}
+                className="text-gray-500 hover:text-white"
+                title="Ukryj"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <div className="px-3 py-2 space-y-1 max-h-64 overflow-y-auto">
+              {metaLoading && <div className="text-gray-500">Ładowanie…</div>}
+              {metaError && <div className="text-red-400">{metaError}</div>}
+              {!metaLoading && !metaError && metaFields.length === 0 && (
+                <div className="text-gray-500">Brak dostępnych pól.</div>
+              )}
+              {metaFields.map((f) => (
+                <div key={f.tag} className="flex items-baseline gap-2">
+                  <span className="text-gray-400 min-w-[110px] shrink-0">{f.label}</span>
+                  <span className="font-mono text-gray-100">{f.display}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -557,6 +617,19 @@ export default function FrameViewer({ frames, currentFrame, setCurrentFrame, loa
               >
                 <SlidersHorizontal className="w-4 h-4" />
               </button>
+              {hasMetadata && (
+                <button
+                  onClick={() => setShowInfo((s) => !s)}
+                  className={`p-2 rounded-lg transition-colors ${
+                    showInfo
+                      ? 'bg-emerald-600/30 text-emerald-400 hover:bg-emerald-600/50'
+                      : 'hover:bg-gray-800 text-gray-500 hover:text-gray-300'
+                  }`}
+                  title="Metadane sekwencji"
+                >
+                  <Info className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
             <div className="w-px h-5 bg-gray-700" />

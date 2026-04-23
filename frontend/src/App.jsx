@@ -67,6 +67,14 @@ export default function App() {
     return myAnn ? myAnn.frame_index : null;
   }, [allAnnotations, user]);
 
+  const currentSequenceHasMetadata = useMemo(() => {
+    if (!selectedPatient || !selectedSequence) return false;
+    const p = patients.find((pp) => pp.patient_id === selectedPatient);
+    if (!p) return false;
+    const s = p.sequences.find((ss) => ss.sequence_id === selectedSequence);
+    return !!(s && s.has_metadata);
+  }, [patients, selectedPatient, selectedSequence]);
+
   // Check stored token on mount
   useEffect(() => {
     const token = getToken();
@@ -418,6 +426,10 @@ export default function App() {
                 markedFrame={markedFrame}
                 allAnnotations={allAnnotations}
                 currentUsername={user.username}
+                datasetId={selectedDataset}
+                patientId={selectedPatient}
+                sequenceId={selectedSequence}
+                hasMetadata={currentSequenceHasMetadata}
               />
             </div>
 

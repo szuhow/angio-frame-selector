@@ -177,6 +177,20 @@ Kluczowe endpointy:
 - `GET /api/export/versions/{id}/download` – pobranie migawki (z `ETag`)
 - `DELETE /api/export/versions/{id}` – usunięcie wersji (admin)
 
+### Metadane sekwencji (kąt obrazowania i inne)
+
+Panel „Metadane” w widoku sekwencji wyświetla wartości tagów DICOM wyciągane z pliku `.dcm` lub z sidecara DICOM-JSON (`foo.dcm.json` obok/w folderze sekwencji PNG). Dostępny przycisk <kbd>i</kbd> w pasku narzędzi pokazuje się tylko gdy sekwencja posiada choć jeden skonfigurowany tag.
+
+- Domyślna lista zawiera `PositionerPrimaryAngle (0018,1510)`, `PositionerSecondaryAngle (0018,1511)`, `KVP`, `XRayTubeCurrent`, `FrameTime`, `StudyDate`.
+- Kąty są formatowane jako `RAO/LAO` i `CAU/CRA` na podstawie znaku (np. `-24 → RAO 24°`).
+- Admin zarządza listą w zakładce **Metadane** panelu administratora: dodawanie tagów w formacie `00181510` / `0018,1510` / `(0018,1510)`, nadpisywanie etykiet, zmiana kolejności, przywracanie wartości domyślnych.
+
+Endpointy:
+
+- `GET /api/metadata/config` – bieżąca konfiguracja (każdy zalogowany)
+- `PUT /api/metadata/config` – aktualizacja (admin)
+- `GET /api/patients/{pid}/sequences/{sid}/metadata?dataset_id=…` – wartości dla sekwencji
+
 ## Kontrola wersji
 
 Repozytorium jest przygotowane do pracy z Git:

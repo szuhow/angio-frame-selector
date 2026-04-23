@@ -50,6 +50,15 @@ from auth import (
     hash_password,
     verify_password,
 )
+from metadata import (
+    build_metadata_fields,
+    default_config as _metadata_default_config,
+    extract_from_dicom,
+    extract_from_sidecar_json,
+    find_sidecar,
+    normalize_config as _metadata_normalize_config,
+    normalize_tag as _metadata_normalize_tag,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -297,6 +306,14 @@ def _init_db() -> None:
                 counts_json  TEXT NOT NULL DEFAULT '{}',
                 notes        TEXT NOT NULL DEFAULT '',
                 UNIQUE(dataset_id, version, format)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )
             """
         )
@@ -595,6 +612,80 @@ def _dicom_frame_count(ds: pydicom.Dataset) -> int:
 _DICOM_CACHE: dict[str, pydicom.Dataset] = {}
 # Path index keyed by (dataset_id, patient_id, sequence_id)
 _PATH_INDEX: dict[tuple[int, str, str], Path] = {}
+# resolved_path_str -> raw extracted metadata {tag: {"value", "vr"}}
+_METADATA_CACHE: dict[str, dict[str, dict[str, Any]]] = {}
+
+
+def _invalidate_metadata_cache() -> None:
+    """Drop cached metadata; call when config changes or files move."""
+    _METADATA_CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
+# Metadata display configuration (admin-editable whitelist of tags)
+# ---------------------------------------------------------------------------
+
+_SETTINGS_KEY_METADATA_FIELDS = "metadata_display_fields"
+
+
+def _get_metadata_config() -> list[dict[str, str]]:
+    """Return the current ordered field list, falling back to defaults."""
+    with _db() as cur:
+        cur.execute(
+            "SELECT value FROM app_settings WHERE key=?",
+            (_SETTINGS_KEY_METADATA_FIELDS,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return _metadata_default_config()
+    try:
+        raw = json.loads(row["value"])
+    except Exception:
+        return _metadata_default_config()
+    return _metadata_normalize_config(raw if isinstance(raw, list) else [])
+
+
+def _set_metadata_config(fields: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Persist a new field list; returns the normalized stored value."""
+    normalized = _metadata_normalize_config(fields)
+    with _db() as cur:
+        cur.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_SETTINGS_KEY_METADATA_FIELDS, json.dumps(normalized)),
+        )
+    _invalidate_metadata_cache()
+    return normalized
+
+
+def _extract_sequence_metadata(
+    path: Path, tags: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Return raw `{tag: {"value", "vr"}}` for a resolved sequence path."""
+    if not tags:
+        return {}
+    key = str(path)
+    cached = _METADATA_CACHE.get(key)
+    if cached is not None:
+        return {t: cached[t] for t in tags if t in cached}
+
+    raw: dict[str, dict[str, Any]] = {}
+    try:
+        if path.is_dir():
+            sidecar = find_sidecar(path)
+            if sidecar is not None:
+                raw = extract_from_sidecar_json(sidecar, tags)
+        elif path.is_file() and path.suffix.lower() == ".dcm":
+            ds = _get_dicom(path)
+            raw = extract_from_dicom(ds, tags)
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Metadata extraction failed for %s: %s", path, exc
+        )
+        raw = {}
+    _METADATA_CACHE[key] = raw
+    return raw
 
 
 def _get_dicom(path: Path) -> pydicom.Dataset:
@@ -639,6 +730,7 @@ def scan_dataset(ds_row: sqlite3.Row) -> list[dict]:
     patients: dict[str, dict[str, Any]] = {}
     annotated = _annotated_keys(dataset_id)
     skipped = _skipped_keys(dataset_id)
+    config_tags = [f["tag"] for f in _get_metadata_config()]
 
     # Clear existing entries for this dataset
     for key in list(_PATH_INDEX.keys()):
@@ -681,12 +773,19 @@ def scan_dataset(ds_row: sqlite3.Row) -> list[dict]:
                 if (patient_id, seq_id) in annotated
                 else ("skipped" if (patient_id, seq_id) in skipped else "todo")
             )
+            has_meta = False
+            if config_tags:
+                try:
+                    has_meta = bool(extract_from_dicom(d, config_tags))
+                except Exception:
+                    has_meta = False
             patients[patient_id]["sequences"].append(
                 {
                     "sequence_id": seq_id,
                     "type": "dicom",
                     "frame_count": fc,
                     "status": seq_status,
+                    "has_metadata": has_meta,
                 }
             )
             _PATH_INDEX[(dataset_id, patient_id, seq_id)] = dcm_path
@@ -735,12 +834,21 @@ def scan_dataset(ds_row: sqlite3.Row) -> list[dict]:
             if (patient_id, seq_id) in annotated
             else ("skipped" if (patient_id, seq_id) in skipped else "todo")
         )
+        has_meta = False
+        if config_tags:
+            sidecar = find_sidecar(png_dir)
+            if sidecar is not None:
+                try:
+                    has_meta = bool(extract_from_sidecar_json(sidecar, config_tags))
+                except Exception:
+                    has_meta = False
         patients[patient_id]["sequences"].append(
             {
                 "sequence_id": seq_id,
                 "type": "png",
                 "frame_count": len(pngs),
                 "status": seq_status,
+                "has_metadata": has_meta,
             }
         )
         _PATH_INDEX[(dataset_id, patient_id, seq_id)] = png_dir
@@ -1102,6 +1210,7 @@ def admin_delete_dataset(dataset_id: int, user: dict = Depends(require_admin)):
     for key in list(_PATH_INDEX.keys()):
         if key[0] == dataset_id:
             del _PATH_INDEX[key]
+    _invalidate_metadata_cache()
 
     return {"status": "ok"}
 
@@ -1889,3 +1998,49 @@ def delete_export_version(version_id: int, user: dict = Depends(require_admin)):
     except Exception:
         pass
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# API – metadata display configuration & extraction
+# ---------------------------------------------------------------------------
+
+class MetadataFieldConfig(BaseModel):
+    tag: str
+    label: Optional[str] = None
+
+
+class MetadataConfigUpdate(BaseModel):
+    fields: list[MetadataFieldConfig]
+
+
+@app.get("/api/metadata/config")
+def get_metadata_config(user: dict = Depends(get_current_user)):
+    """Return the ordered list of fields to display. Any authenticated user can read it."""
+    return {"fields": _get_metadata_config()}
+
+
+@app.put("/api/metadata/config")
+def update_metadata_config(
+    body: MetadataConfigUpdate, user: dict = Depends(require_admin)
+):
+    """Replace the displayed-field list. Admin only."""
+    fields = [f.model_dump() for f in body.fields]
+    stored = _set_metadata_config(fields)
+    return {"fields": stored}
+
+
+@app.get(
+    "/api/patients/{patient_id}/sequences/{sequence_id:path}/metadata"
+)
+def get_sequence_metadata(
+    patient_id: str,
+    sequence_id: str,
+    dataset_id: int = Query(..., description="Dataset ID"),
+    user: dict = Depends(get_current_user),
+):
+    """Return the configured metadata fields extracted from the sequence."""
+    resolved = _lookup_sequence_path(user, dataset_id, patient_id, sequence_id)
+    config = _get_metadata_config()
+    tags = [f["tag"] for f in config]
+    raw = _extract_sequence_metadata(resolved, tags)
+    return {"fields": build_metadata_fields(raw, config)}

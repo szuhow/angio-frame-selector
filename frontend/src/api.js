@@ -286,3 +286,29 @@ export async function adminUnassignDataset(userId, datasetId) {
   if (!res.ok) throw await parseError(res, 'Nie udało się odpiąć zbioru');
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// Sequence metadata (DICOM tags / DICOM-JSON sidecar)
+// ---------------------------------------------------------------------------
+export async function fetchSequenceMetadata(datasetId, patientId, sequenceId) {
+  const url = `${API}/api/patients/${encodeURIComponent(patientId)}/sequences/${encodePathSegments(sequenceId)}/metadata${qs({ dataset_id: datasetId })}`;
+  const res = await apiFetch(url);
+  if (!res.ok) throw await parseError(res, 'Nie udało się pobrać metadanych');
+  return res.json();
+}
+
+export async function fetchMetadataConfig() {
+  const res = await apiFetch(`${API}/api/metadata/config`);
+  if (!res.ok) throw await parseError(res, 'Nie udało się pobrać konfiguracji metadanych');
+  return res.json();
+}
+
+export async function updateMetadataConfig(fields) {
+  const res = await apiFetch(`${API}/api/metadata/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) throw await parseError(res, 'Nie udało się zapisać konfiguracji metadanych');
+  return res.json();
+}
