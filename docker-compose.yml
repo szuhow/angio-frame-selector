@@ -18,14 +18,28 @@ services:
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10737418240}
       JWT_SECRET: ${JWT_SECRET:-replace-me-before-production}
       JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
+      # Outbound sync to crai-collector (disabled by default).
+      CRAI_COLLECTOR_SYNC_ENABLED: ${CRAI_COLLECTOR_SYNC_ENABLED:-false}
+      CRAI_COLLECTOR_BASE_URL: ${CRAI_COLLECTOR_BASE_URL:-}
+      CRAI_COLLECTOR_USERNAME: ${CRAI_COLLECTOR_USERNAME:-}
+      CRAI_COLLECTOR_PASSWORD: ${CRAI_COLLECTOR_PASSWORD:-}
+      CRAI_COLLECTOR_TIMEOUT_S: ${CRAI_COLLECTOR_TIMEOUT_S:-10}
+      CRAI_COLLECTOR_MAX_CONCURRENCY: ${CRAI_COLLECTOR_MAX_CONCURRENCY:-4}
+      CRAI_COLLECTOR_ARTIFACT_REASONS: ${CRAI_COLLECTOR_ARTIFACT_REASONS:-}
+      # Single source of truth for the backend port.
+      BACKEND_PORT: ${BACKEND_PORT:-8000}
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
     restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       network: host
+    environment:
+      # Injected into nginx.conf at container start via envsubst so the
+      # reverse proxy targets the configured backend port.
+      BACKEND_PORT: ${BACKEND_PORT:-8000}
     ports:
       - "${FRONTEND_PORT:-3000}:80"
     depends_on:

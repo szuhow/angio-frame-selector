@@ -11,6 +11,47 @@ Narzędzie do przeglądania i anotacji sekwencji angiografii wieńcowej. Projekt
 - `backend/.env.example` – wzorzec zmiennych środowiskowych dla lokalnego uruchamiania backendu
 - `start.sh` – szybki start w trybie deweloperskim bez Dockera
 
+## Integracja z `crai-collector`
+
+Backend opcjonalnie replikuje **sfinalizowane wersje eksportu** do zewnętrznego data lake `crai-collector`. Integracja jest realizowana wyłącznie po stronie tego repozytorium – kod `crai-collector` nie jest modyfikowany, konsumujemy jedynie jego publiczny kontrakt HTTP:
+
+- `POST /api/key-frame-selector/` – jedno wywołanie na anotację `(sequence_id, frame_index)`
+- `POST /api/artifact-classifier/` – jedno wywołanie na pominięcie, gdy `reason` pasuje do skonfigurowanego zbioru „reasonów artefaktowych” (domyślnie: `Artefakt`, `Artifact`, `Brak kontrastu`)
+- `POST /api/dicom-parameters/` – jedno wywołanie na unikalną sekwencję z odczytanymi z DICOM `NumberOfFrames` i `PositionerPrimaryAngle`
+
+Sync odpala się automatycznie po `POST /api/export/versions` (w tle), a jego wyniki są zapisywane w tabeli `crai_sync_log`. Zdarzenia nie-webhookowe (pojedyncze kliknięcia) **nie** wywołują synchronizacji – źródłem prawdy jest niezmienny snapshot wersji.
+
+### Zmienne środowiskowe
+
+| Zmienna | Domyślnie | Opis |
+| --- | --- | --- |
+| `CRAI_COLLECTOR_SYNC_ENABLED` | `false` | `true` aby włączyć replikację |
+| `CRAI_COLLECTOR_BASE_URL` | – | np. `http://collector.internal:8000` |
+| `CRAI_COLLECTOR_USERNAME` | – | użytkownik HTTP Basic |
+| `CRAI_COLLECTOR_PASSWORD` | – | hasło HTTP Basic |
+| `CRAI_COLLECTOR_TIMEOUT_S` | `10` | timeout pojedynczego żądania |
+| `CRAI_COLLECTOR_MAX_CONCURRENCY` | `4` | równolegle wysyłane żądania |
+| `CRAI_COLLECTOR_ARTIFACT_REASONS` | `["Artefakt","Artifact","Brak kontrastu"]` | lista JSON reasonów mapowanych na `artifact: true` |
+
+### Ręczne uruchomienie / dry-run
+
+```bash
+# podgląd bez żadnych wywołań HTTP i bez zapisów do logu
+curl -u admin:secret -X POST \
+  "http://localhost:8000/api/export/versions/42/sync?dry_run=true"
+
+# rzeczywista replikacja (admin-only)
+curl -u admin:secret -X POST \
+  "http://localhost:8000/api/export/versions/42/sync"
+
+# historia prób dla danej wersji
+curl -u admin:secret \
+  "http://localhost:8000/api/export/versions/42/sync/log?limit=100"
+```
+
+**Non-goal:** ten mechanizm nie implementuje pobierania danych z `crai-collector`, nie modyfikuje jego schematu i nie dopuszcza zmian w jego repozytorium – jest to wyłącznie klient outbound.
+
+
 Frontend nie wymaga osobnego pliku env w obecnej konfiguracji. W developmentcie używa proxy Vite do backendu, a w kontenerze produkcyjnym proxy Nginx.
 
 ## Wymagania

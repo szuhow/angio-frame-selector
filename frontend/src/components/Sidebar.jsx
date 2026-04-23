@@ -109,7 +109,9 @@ export default function Sidebar({
                   <ChevronRight className="w-4 h-4 shrink-0 text-gray-500" />
                 )}
                 <User className="w-4 h-4 shrink-0 text-blue-400" />
-                <span className="truncate flex-1 text-left">{patient.patient_id}</span>
+                <span className="truncate flex-1 text-left" title={patient.patient_id}>
+                  {patient.display_name || patient.patient_id}
+                </span>
                 <span className="text-xs text-gray-500">
                   {doneCount}/{totalCount}
                 </span>

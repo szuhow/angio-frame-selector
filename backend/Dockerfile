@@ -26,6 +26,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
     EXPORTS_DIR=/app/exports \
     DB_PATH=/app/db/keyselector.db
 
-EXPOSE 8000
+# Single source of truth for the backend port is the BACKEND_PORT env var.
+# Override via docker-compose or `docker run -e BACKEND_PORT=...`.
+ENV BACKEND_PORT=8000
+EXPOSE ${BACKEND_PORT}
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form so $BACKEND_PORT is expanded at container start.
+CMD uvicorn main:app --host 0.0.0.0 --port ${BACKEND_PORT}

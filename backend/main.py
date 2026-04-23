@@ -317,6 +317,27 @@ def _init_db() -> None:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS crai_sync_log (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                version_id       INTEGER NOT NULL,
+                target_endpoint  TEXT NOT NULL,
+                experiment_name  TEXT NOT NULL,
+                source_row_ref   TEXT NOT NULL,
+                http_status      INTEGER,
+                response_excerpt TEXT,
+                attempt_count    INTEGER NOT NULL,
+                duration_ms      INTEGER NOT NULL,
+                outcome          TEXT NOT NULL,
+                created_at       TEXT NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS ix_crai_sync_log_version "
+            "ON crai_sync_log(version_id)"
+        )
 
     # Migrate legacy annotation tables (pre dataset_id) to the new schema
     _migrate_annotations_to_dataset_id()
@@ -699,6 +720,60 @@ def _natural_sort_key(s: str):
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r"(\d+)", s)]
 
 
+def _dicom_tag_str(ds: pydicom.Dataset, tag: tuple[int, int]) -> Optional[str]:
+    """Return a DICOM tag's value as a stripped string, or None."""
+    try:
+        raw = ds.get(tag, None)
+        if raw is None:
+            return None
+        val = raw.value if hasattr(raw, "value") else raw
+        if val is None:
+            return None
+        s = str(val).strip()
+        return s or None
+    except Exception:
+        return None
+
+
+def _dicom_patient_name(ds: pydicom.Dataset) -> Optional[str]:
+    """Return the DICOM PatientName (0010,0010) as a display string, or None."""
+    return _dicom_tag_str(ds, (0x0010, 0x0010))
+
+
+def _dicom_patient_id(ds: pydicom.Dataset) -> Optional[str]:
+    """Return the DICOM PatientID (0010,0020) used as the grouping key, or None."""
+    return _dicom_tag_str(ds, (0x0010, 0x0020))
+
+
+def _sidecar_tag_str(png_dir: Path, tag_key: str) -> Optional[str]:
+    """Return a tag value from the PNG sidecar JSON (tag_key e.g. '00100010')."""
+    try:
+        sidecar = find_sidecar(png_dir)
+        if sidecar is None:
+            return None
+        tags = extract_from_sidecar_json(sidecar, [tag_key])
+        entry = tags.get(tag_key)
+        if not entry:
+            return None
+        val = entry.get("value")
+        if val is None:
+            return None
+        s = str(val).strip()
+        return s or None
+    except Exception:
+        return None
+
+
+def _sidecar_patient_name(png_dir: Path) -> Optional[str]:
+    """Return PatientName from a DICOM-JSON sidecar next to a PNG sequence."""
+    return _sidecar_tag_str(png_dir, "00100010")
+
+
+def _sidecar_patient_id(png_dir: Path) -> Optional[str]:
+    """Return PatientID from a DICOM-JSON sidecar next to a PNG sequence."""
+    return _sidecar_tag_str(png_dir, "00100020")
+
+
 def _annotated_keys(dataset_id: int) -> set[tuple[str, str]]:
     with _db() as cur:
         cur.execute(
@@ -747,26 +822,41 @@ def scan_dataset(ds_row: sqlite3.Row) -> list[dict]:
         rel = dcm_path.relative_to(root)
         parts = rel.parts
 
+        # Sequence id = path relative to the top-level folder (without .dcm).
+        # Kept folder-relative so that URLs/DB keys remain stable and backward
+        # compatible; patient grouping is driven by the DICOM tag below.
         if len(parts) == 1:
-            patient_id = dcm_path.stem
             seq_id = dcm_path.stem
         else:
-            patient_id = parts[0]
             seq_id = (
                 str(Path(*parts[1:])).rsplit(".", 1)[0]
                 if len(parts) > 1
                 else dcm_path.stem
             )
 
+        # Folder-based fallback patient id (used when DICOM tag is missing).
+        folder_pid = parts[0] if len(parts) > 1 else dcm_path.stem
+
+        try:
+            d = _get_dicom(dcm_path)
+        except Exception:
+            continue
+
+        # Group by actual DICOM PatientID (0010,0020) so that all sequences
+        # belonging to the same patient are aggregated into a single tree node
+        # regardless of on-disk folder layout. Fall back to the folder name
+        # when the tag is missing or empty.
+        patient_id = _dicom_patient_id(d) or folder_pid
+
         if patient_id not in patients:
             patients[patient_id] = {
                 "patient_id": patient_id,
+                "display_name": None,
                 "dataset_id": dataset_id,
                 "sequences": [],
             }
 
         try:
-            d = _get_dicom(dcm_path)
             fc = _dicom_frame_count(d)
             seq_status = (
                 "done"
@@ -779,6 +869,9 @@ def scan_dataset(ds_row: sqlite3.Row) -> list[dict]:
                     has_meta = bool(extract_from_dicom(d, config_tags))
                 except Exception:
                     has_meta = False
+            # Capture PatientName from the first DICOM seen for this patient.
+            if patients[patient_id]["display_name"] is None:
+                patients[patient_id]["display_name"] = _dicom_patient_name(d)
             patients[patient_id]["sequences"].append(
                 {
                     "sequence_id": seq_id,
@@ -808,7 +901,7 @@ def scan_dataset(ds_row: sqlite3.Row) -> list[dict]:
         if len(parts) < 1:
             continue
 
-        patient_id = parts[0]
+        folder_pid = parts[0]
         seq_id = png_dir.name if len(parts) == 1 else str(Path(*parts[1:]))
 
         pngs = sorted(
@@ -822,9 +915,13 @@ def scan_dataset(ds_row: sqlite3.Row) -> list[dict]:
         if not pngs:
             continue
 
+        # Group by sidecar PatientID when present; fall back to folder name.
+        patient_id = _sidecar_patient_id(png_dir) or folder_pid
+
         if patient_id not in patients:
             patients[patient_id] = {
                 "patient_id": patient_id,
+                "display_name": None,
                 "dataset_id": dataset_id,
                 "sequences": [],
             }
@@ -835,13 +932,15 @@ def scan_dataset(ds_row: sqlite3.Row) -> list[dict]:
             else ("skipped" if (patient_id, seq_id) in skipped else "todo")
         )
         has_meta = False
-        if config_tags:
-            sidecar = find_sidecar(png_dir)
-            if sidecar is not None:
-                try:
-                    has_meta = bool(extract_from_sidecar_json(sidecar, config_tags))
-                except Exception:
-                    has_meta = False
+        sidecar = find_sidecar(png_dir) if config_tags else None
+        if config_tags and sidecar is not None:
+            try:
+                has_meta = bool(extract_from_sidecar_json(sidecar, config_tags))
+            except Exception:
+                has_meta = False
+        # Capture PatientName from the first sidecar seen for this patient.
+        if patients[patient_id]["display_name"] is None:
+            patients[patient_id]["display_name"] = _sidecar_patient_name(png_dir)
         patients[patient_id]["sequences"].append(
             {
                 "sequence_id": seq_id,
@@ -853,7 +952,16 @@ def scan_dataset(ds_row: sqlite3.Row) -> list[dict]:
         )
         _PATH_INDEX[(dataset_id, patient_id, seq_id)] = png_dir
 
-    return sorted(patients.values(), key=lambda p: _natural_sort_key(p["patient_id"]))
+    # Sort each patient's sequences by natural order of sequence_id so the
+    # annotator sees them in a predictable grouping per patient.
+    for p in patients.values():
+        p["sequences"].sort(key=lambda s: _natural_sort_key(str(s["sequence_id"])))
+
+    # Sort patients by display_name when available, falling back to patient_id.
+    return sorted(
+        patients.values(),
+        key=lambda p: _natural_sort_key(p.get("display_name") or p["patient_id"]),
+    )
 
 
 def _scan_datasets_for_user(user: dict, dataset_id: Optional[int] = None) -> list[dict]:
@@ -1184,20 +1292,17 @@ def admin_delete_dataset(dataset_id: int, user: dict = Depends(require_admin)):
     if ds is None:
         raise HTTPException(status_code=404, detail="Dataset nie znaleziony")
 
-    root = Path(ds["root_path"])
     with _db() as cur:
         cur.execute("DELETE FROM datasets WHERE id=?", (dataset_id,))
 
-    # Remove library directory only if it lives under LIBRARY_DIR (safety)
-    try:
-        root.resolve().relative_to(LIBRARY_DIR.resolve())
-        if root.exists():
-            shutil.rmtree(root, ignore_errors=True)
-    except ValueError:
-        # root_path is outside LIBRARY_DIR (e.g. legacy dataset pointing at DATA_DIR) – don't touch it
-        pass
+    # NOTE: We intentionally do NOT delete the source directory on disk.
+    # `LIBRARY_DIR` is frequently a bind-mount of a host path
+    # (`HOST_LIBRARY_DIR`) containing user-curated DICOMs — blowing it away
+    # would be destructive and surprising. Removing the dataset only
+    # unregisters it; the folder remains available for re-registration. An
+    # admin who truly wants to delete source files should do so on the host.
 
-    # Remove exports directory for this dataset
+    # Remove exports directory for this dataset (app-managed artifacts only)
     export_root = (EXPORTS_DIR / ds["slug"]).resolve()
     try:
         export_root.relative_to(EXPORTS_DIR.resolve())
@@ -1842,7 +1947,7 @@ def _export_row_to_dict(row: sqlite3.Row) -> dict:
 
 
 @app.post("/api/export/versions", status_code=201)
-def create_export_version(
+async def create_export_version(
     body: ExportVersionCreate, user: dict = Depends(require_admin)
 ):
     if body.format not in _ALLOWED_EXPORT_FORMATS:
@@ -1920,7 +2025,7 @@ def create_export_version(
             )
             new_id = cur.lastrowid
             cur.execute("SELECT * FROM export_versions WHERE id=?", (new_id,))
-            return _export_row_to_dict(cur.fetchone())
+            result = _export_row_to_dict(cur.fetchone())
     except sqlite3.IntegrityError:
         # Race on unique constraint
         try:
@@ -1928,6 +2033,22 @@ def create_export_version(
         except Exception:
             pass
         raise HTTPException(status_code=409, detail="Wersja już istnieje")
+
+    # Schedule outbound sync to crai-collector (fire-and-forget).
+    try:
+        from crai_sync import crai_sync_config, sync_export_version
+        config, reason = crai_sync_config()
+        if config is not None:
+            asyncio.create_task(sync_export_version(new_id))
+            result["sync_triggered"] = True
+            result["sync_error"] = None
+        else:
+            result["sync_triggered"] = False
+            result["sync_error"] = reason
+    except Exception as exc:  # never let sync scheduling break the export
+        result["sync_triggered"] = False
+        result["sync_error"] = f"sync scheduling failed: {exc}"
+    return result
 
 
 @app.get("/api/export/versions")
@@ -1998,6 +2119,55 @@ def delete_export_version(version_id: int, user: dict = Depends(require_admin)):
     except Exception:
         pass
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# API – crai-collector sync (admin)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/export/versions/{version_id}/sync")
+async def sync_export_version_endpoint(
+    version_id: int,
+    dry_run: bool = Query(False),
+    user: dict = Depends(require_admin),
+):
+    """Re-run outbound replication of a specific export version."""
+    from crai_sync import sync_export_version
+
+    with _db() as cur:
+        cur.execute("SELECT id FROM export_versions WHERE id=?", (version_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Wersja nie znaleziona")
+    summary = await sync_export_version(version_id, dry_run=dry_run)
+    return summary.to_dict()
+
+
+@app.get("/api/export/versions/{version_id}/sync/log")
+def get_export_version_sync_log(
+    version_id: int,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    user: dict = Depends(require_admin),
+):
+    """Paginated crai_sync_log rows for a given export version."""
+    with _db() as cur:
+        cur.execute("SELECT id FROM export_versions WHERE id=?", (version_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Wersja nie znaleziona")
+        cur.execute(
+            """
+            SELECT id, version_id, target_endpoint, experiment_name, source_row_ref,
+                   http_status, response_excerpt, attempt_count, duration_ms,
+                   outcome, created_at
+            FROM crai_sync_log
+            WHERE version_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (version_id, limit, offset),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 # ---------------------------------------------------------------------------
